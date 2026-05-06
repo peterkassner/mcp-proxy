@@ -1,6 +1,6 @@
 [project]
 name = "mcp-proxy"
-description = "A MCP server which proxies requests to a remote MCP server over SSE transport."
+description = "A MCP server which proxies requests to a remote MCP server over streamable HTTP or SSE."
 authors = [{ name = "Sergey Parfenyuk", email = "sergey.parfenyuk@gmail.com" }]
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -21,13 +21,14 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Utilities",
     "Typing :: Typed",
 ]
-version = "0.9.0"
+version = "0.10.0"
 requires-python = ">=3.10"
-dependencies = ["mcp==1.9.4", "uvicorn>=0.34.0"]
+dependencies = ["httpx-auth>=0.22.0", "mcp>=1.17.0", "uvicorn>=0.34.0"]
 
 [build-system]
 requires = ["setuptools"]

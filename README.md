@@ -60,6 +60,9 @@ Arguments
 | `command_or_url` | Yes      | The MCP server SSE endpoint to connect to                                                                         | http://example.io/sse                         |
 | `--headers`      | No       | Headers to use for the MCP server SSE connection                                                                  | Authorization 'Bearer my-secret-access-token' |
 | `--transport`    | No       | Decides which transport protocol to use when connecting to an MCP server. Can be either 'sse' or 'streamablehttp' | streamablehttp                                |
+| `--client-id`    | No       | OAuth2 client ID for authentication                                                                               | your_client_id                                |
+| `--client-secret`| No       | OAuth2 client secret for authentication                                                                           | your_client_secret                            |
+| `--token-url`    | No       | OAuth2 token endpoint URL for authentication                                                                      | https://auth.example.com/oauth/token          |
 
 Environment Variables
 
@@ -124,6 +127,7 @@ Arguments
 | `--cwd`                              | No                         | The working directory to pass to the MCP stdio server process.                                | /tmp                                        |
 | `--pass-environment`                 | No                         | Pass through all environment variables when spawning the server                               | --no-pass-environment                       |
 | `--allow-origin`                     | No                         | Allowed origins for the SSE server. Can be used multiple times. Default is no CORS allowed.   | --allow-origin "\*"                         |
+| `--expose-header`                    | No                         | Headers added to `Access-Control-Expose-Headers`. Can be used multiple times. Defaults to `mcp-session-id`. | --expose-header Custom-Header              |
 | `--stateless`                        | No                         | Enable stateless mode for streamable http transports. Default is False                        | --no-stateless                              |
 | `--named-server NAME COMMAND_STRING` | No                         | Defines a named stdio server.                                                                 | --named-server fetch 'uvx mcp-server-fetch' |
 | `--named-server-config FILE_PATH`    | No                         | Path to a JSON file defining named stdio servers.                                             | --named-server-config /path/to/servers.json |
@@ -156,6 +160,9 @@ mcp-proxy --port=8080 --named-server fetch 'uvx mcp-server-fetch' --named-server
 
 # Start multiple named MCP servers using a configuration file
 mcp-proxy --port=8080 --named-server-config ./servers.json
+
+# Start the MCP server with CORS enabled and custom exposed headers
+mcp-proxy --port=8080 --allow-origin='*' --expose-header Custom-Header uvx mcp-server-fetch
 ```
 
 ## Named Servers
@@ -305,14 +312,18 @@ services:
 ## Command line arguments
 
 ```bash
-usage: mcp-proxy [-h] [--version] [-H KEY VALUE] [--transport {sse,streamablehttp}]
-                 [-e KEY VALUE] [--cwd CWD]
-                 [--pass-environment | --no-pass-environment] [--log-level LEVEL] [--debug | --no-debug]
+usage: mcp-proxy [-h] [--version] [-H KEY VALUE]
+                 [--transport {sse,streamablehttp}] [--verify-ssl [VALUE]]
+                 [--no-verify-ssl] [-e KEY VALUE] [--cwd CWD]
+                 [--client-id CLIENT_ID] [--client-secret CLIENT_SECRET] [--token-url TOKEN_URL]
+                 [--pass-environment | --no-pass-environment]
+                 [--log-level LEVEL] [--debug | --no-debug]
                  [--named-server NAME COMMAND_STRING]
                  [--named-server-config FILE_PATH] [--port PORT] [--host HOST]
                  [--stateless | --no-stateless] [--sse-port SSE_PORT]
                  [--sse-host SSE_HOST]
                  [--allow-origin ALLOW_ORIGIN [ALLOW_ORIGIN ...]]
+                 [--expose-header HEADER]
                  [command_or_url] [args ...]
 
 Start the MCP proxy in one of two possible modes: as a client or a server.
@@ -329,6 +340,14 @@ SSE/StreamableHTTP client options:
                         Headers to pass to the SSE server. Can be used multiple times.
   --transport {sse,streamablehttp}
                         The transport to use for the client. Default is SSE.
+  --verify-ssl [VALUE]  Control SSL verification when acting as a client. Use without a value to force verification, pass 'false' to disable, or provide a path to a PEM bundle.
+  --no-verify-ssl       Disable SSL verification (alias for --verify-ssl false).
+  --client-id CLIENT_ID
+                        OAuth2 client ID for authentication
+  --client-secret CLIENT_SECRET
+                        OAuth2 client secret for authentication
+  --token-url TOKEN_URL
+                        OAuth2 token URL for authentication
 
 stdio client options:
   args                  Any extra arguments to the command to spawn the default server. Ignored if only named servers are defined.
@@ -352,17 +371,20 @@ SSE server options:
   --sse-host SSE_HOST   (deprecated) Same as --host
   --allow-origin ALLOW_ORIGIN [ALLOW_ORIGIN ...]
                         Allowed origins for the SSE server. Can be used multiple times. Default is no CORS allowed.
+  --expose-header HEADER
+                        Headers to expose via Access-Control-Expose-Headers. Defaults to 'Mcp-Session-Id'. Can be used multiple times.
 
 Examples:
   mcp-proxy http://localhost:8080/sse
+  mcp-proxy --no-verify-ssl https://server.local/sse
   mcp-proxy --transport streamablehttp http://localhost:8080/mcp
   mcp-proxy --headers Authorization 'Bearer YOUR_TOKEN' http://localhost:8080/sse
-  mcp-proxy --port 8080 -- my-default-command --arg1 value1
-  mcp-proxy --port 8080 --named-server fetch1 'uvx mcp-server-fetch' --named-server tool2 'my-custom-tool --verbose'
-  mcp-proxy --port 8080 --named-server-config /path/to/servers.json
-  mcp-proxy --port 8080 --named-server-config /path/to/servers.json -- my-default-command --arg1
-  mcp-proxy --port 8080 -e KEY VALUE -e ANOTHER_KEY ANOTHER_VALUE -- my-default-command
-  mcp-proxy --port 8080 --allow-origin='*' -- my-default-command
+  mcp-proxy --client-id CLIENT_ID --client-secret CLIENT_SECRET --token-url https://auth.example.com/token http://localhost:8080/sse
+  mcp-proxy --port 8080 -- your-command --arg1 value1 --arg2 value2
+  mcp-proxy --named-server fetch 'uvx mcp-server-fetch' --port 8080
+  mcp-proxy your-command --port 8080 -e KEY VALUE -e ANOTHER_KEY ANOTHER_VALUE
+  mcp-proxy your-command --port 8080 --allow-origin='*'
+  mcp-proxy your-command --port 8080 --allow-origin='*' --expose-header Custom-Header
 ```
 
 ### Example config file

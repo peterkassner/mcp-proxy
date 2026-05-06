@@ -2,10 +2,10 @@
 
 import contextlib
 import logging
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import uvicorn
 from mcp.client.session import ClientSession
@@ -25,6 +25,12 @@ from .proxy_server import create_proxy_server
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_EXPOSE_HEADERS: Final[tuple[str, ...]] = ("mcp-session-id",)
+
+
+def _default_expose_headers() -> list[str]:
+    return list(DEFAULT_EXPOSE_HEADERS)
+
 
 @dataclass
 class MCPServerSettings:
@@ -34,6 +40,7 @@ class MCPServerSettings:
     port: int
     stateless: bool = False
     allow_origins: list[str] | None = None
+    expose_headers: list[str] = field(default_factory=_default_expose_headers)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
 
@@ -46,6 +53,19 @@ _global_status: dict[str, Any] = {
 
 def _update_global_activity() -> None:
     _global_status["api_last_activity"] = datetime.now(timezone.utc).isoformat()
+
+
+class _ASGIEndpointAdapter:
+    """Wrap a coroutine function into an ASGI application."""
+
+    def __init__(self, endpoint: Callable[[Scope, Receive, Send], Awaitable[None]]) -> None:
+        self._endpoint = endpoint
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self._endpoint(scope, receive, send)
+
+
+HTTP_METHODS = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]
 
 
 async def _handle_status(_: Request) -> Response:
@@ -88,9 +108,36 @@ def create_single_instance_routes(
 
     async def handle_streamable_http_instance(scope: Scope, receive: Receive, send: Send) -> None:
         _update_global_activity()
-        await http_session_manager.handle_request(scope, receive, send)
+        updated_scope = scope
+        if scope.get("type") == "http":
+            path = scope.get("path", "")
+            if path and path.rstrip("/") == "/mcp" and not path.endswith("/"):
+                updated_scope = dict(scope)
+                normalized_path = path + "/"
+                logger.debug(
+                    "Normalized request path from '%s' to '%s' without redirect",
+                    path,
+                    normalized_path,
+                )
+                updated_scope["path"] = normalized_path
+
+                raw_path = scope.get("raw_path")
+                if raw_path:
+                    if b"?" in raw_path:
+                        path_part, query_part = raw_path.split(b"?", 1)
+                        updated_scope["raw_path"] = path_part.rstrip(b"/") + b"/?" + query_part
+                    else:
+                        updated_scope["raw_path"] = raw_path.rstrip(b"/") + b"/"
+
+        await http_session_manager.handle_request(updated_scope, receive, send)
 
     routes = [
+        Route(
+            "/mcp",
+            endpoint=_ASGIEndpointAdapter(handle_streamable_http_instance),
+            methods=HTTP_METHODS,
+            include_in_schema=False,
+        ),
         Mount("/mcp", app=handle_streamable_http_instance),
         Route("/sse", endpoint=handle_sse_instance),
         Mount("/messages/", app=sse_transport.handle_post_message),
@@ -176,6 +223,7 @@ async def run_mcp_server(
                     allow_origins=mcp_settings.allow_origins,
                     allow_methods=["*"],
                     allow_headers=["*"],
+                    expose_headers=mcp_settings.expose_headers,
                 ),
             )
 
