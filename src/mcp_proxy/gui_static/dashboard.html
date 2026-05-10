@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MCP Hub Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://unpkg.com/alpinejs@3/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .badge-configured  { @apply bg-green-100 text-green-800; }
+    .badge-failed      { @apply bg-red-100   text-red-800;   }
+    .badge-unknown     { @apply bg-gray-100  text-gray-600;  }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans" x-cloak>
+
+<div x-data="dashboard()" x-init="init()" class="max-w-6xl mx-auto px-4 py-6">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900">MCP Hub Dashboard</h1>
+      <p class="text-sm text-gray-500" x-text="statusLine"></p>
+    </div>
+    <div class="flex gap-3 items-center">
+      <span class="text-xs text-gray-400" x-text="'Refreshed: ' + lastRefresh"></span>
+      <button @click="refresh()"
+        class="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 flex items-center gap-1">
+        <svg :class="loading ? 'spin' : ''" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2"
+          viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round"
+          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Refresh
+      </button>
+      <button @click="showConfig = !showConfig"
+        class="px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300">
+        Config
+      </button>
+      <button @click="restartHub()"
+        :disabled="restarting"
+        class="px-3 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-50">
+        <span x-text="restarting ? 'Restarting…' : 'Restart Hub'"></span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Summary strip -->
+  <div class="flex gap-4 mb-6" x-show="summary">
+    <div class="flex-1 bg-white rounded-lg shadow-sm border p-4 text-center">
+      <div class="text-3xl font-bold text-gray-800" x-text="servers.length"></div>
+      <div class="text-xs text-gray-500 mt-1">Total Servers</div>
+    </div>
+    <div class="flex-1 bg-white rounded-lg shadow-sm border p-4 text-center">
+      <div class="text-3xl font-bold text-green-600" x-text="summary.configured || 0"></div>
+      <div class="text-xs text-gray-500 mt-1">Running</div>
+    </div>
+    <div class="flex-1 bg-white rounded-lg shadow-sm border p-4 text-center">
+      <div class="text-3xl font-bold text-red-500" x-text="summary.setup_failed || 0"></div>
+      <div class="text-xs text-gray-500 mt-1">Failed</div>
+    </div>
+    <div class="flex-1 bg-white rounded-lg shadow-sm border p-4 text-center">
+      <div class="text-3xl font-bold text-gray-400" x-text="summary.other || 0"></div>
+      <div class="text-xs text-gray-500 mt-1">Unknown</div>
+    </div>
+  </div>
+
+  <!-- Error banner -->
+  <div x-show="fetchError" class="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+    <strong>Error:</strong> <span x-text="fetchError"></span>
+  </div>
+
+  <!-- Server cards grid -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+    <template x-for="srv in servers" :key="srv.name">
+      <div class="bg-white rounded-xl shadow-sm border hover:shadow-md transition-shadow p-5"
+           :class="srv.status === 'setup_failed' ? 'border-red-200' : ''">
+
+        <!-- Card header -->
+        <div class="flex items-start justify-between mb-3">
+          <div>
+            <h3 class="font-semibold text-gray-900 text-sm" x-text="srv.name"></h3>
+            <span class="text-xs px-2 py-0.5 rounded-full font-medium mt-1 inline-block"
+              :class="statusClass(srv.status)"
+              x-text="srv.status"></span>
+          </div>
+          <button @click="loadTools(srv)"
+            class="text-xs text-indigo-600 hover:text-indigo-800 underline whitespace-nowrap ml-2">
+            Tools
+          </button>
+        </div>
+
+        <!-- Tools count / list -->
+        <div x-show="srv.toolsLoaded" class="mt-2">
+          <template x-if="srv.toolError">
+            <p class="text-xs text-red-500" x-text="srv.toolError"></p>
+          </template>
+          <template x-if="!srv.toolError">
+            <div>
+              <p class="text-xs text-gray-500 mb-1"
+                 x-text="(srv.tools?.length || srv.resource_count || 0) + (srv.tools?.length === 1 ? ' tool' : ' tools')"></p>
+              <ul class="text-xs text-gray-600 space-y-0.5 max-h-28 overflow-y-auto">
+                <template x-for="t in (srv.tools || [])" :key="t.name">
+                  <li class="truncate" :title="t.description || t.name">
+                    <span class="font-mono text-indigo-700" x-text="t.name"></span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </template>
+        </div>
+
+        <!-- Card footer -->
+        <div class="mt-4 flex gap-2">
+          <button @click="restartServer(srv)"
+            :disabled="srv.restarting"
+            class="flex-1 text-xs py-1.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 disabled:opacity-50">
+            <span x-text="srv.restarting ? 'Restarting…' : 'Restart'"></span>
+          </button>
+          <button @click="loadTools(srv)"
+            :disabled="srv.loadingTools"
+            class="flex-1 text-xs py-1.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 disabled:opacity-50">
+            <span x-text="srv.loadingTools ? 'Probing…' : 'Probe MCP'"></span>
+          </button>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- Config panel -->
+  <div x-show="showConfig" class="bg-white rounded-xl shadow border p-5 mb-8">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold text-gray-800">mcp-proxied-servers.json</h2>
+      <button @click="saveConfig()"
+        :disabled="savingConfig"
+        class="px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50">
+        <span x-text="savingConfig ? 'Saving…' : 'Save Config'"></span>
+      </button>
+    </div>
+    <textarea x-model="configText" rows="20"
+      class="w-full font-mono text-xs border rounded p-2 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-300"></textarea>
+    <p x-show="configSaveMsg" class="text-sm mt-2"
+       :class="configSaveError ? 'text-red-600' : 'text-green-600'"
+       x-text="configSaveMsg"></p>
+  </div>
+
+</div>
+
+<script>
+function dashboard() {
+  return {
+    servers: [],
+    summary: null,
+    loading: false,
+    fetchError: '',
+    lastRefresh: '—',
+    statusLine: 'Connecting…',
+    showConfig: false,
+    configText: '',
+    savingConfig: false,
+    configSaveMsg: '',
+    configSaveError: false,
+    restarting: false,
+    _pollTimer: null,
+
+    init() {
+      this.refresh();
+      this._pollTimer = setInterval(() => this.refresh(), 10000);
+      if (this.showConfig) this.loadConfig();
+    },
+
+    async refresh() {
+      this.loading = true;
+      this.fetchError = '';
+      try {
+        const [statusRes, serversRes] = await Promise.all([
+          fetch('/gui/api/status'),
+          fetch('/gui/api/servers'),
+        ]);
+        const status = await statusRes.json();
+        const serversData = await serversRes.json();
+
+        this.summary = status.summary || {};
+        this.statusLine = `Hub: ${status.hub_url || '?'}`;
+
+        const existing = Object.fromEntries(this.servers.map(s => [s.name, s]));
+        this.servers = (serversData.servers || []).map(srv => ({
+          ...srv,
+          tools: existing[srv.name]?.tools || null,
+          toolsLoaded: existing[srv.name]?.toolsLoaded || false,
+          toolError: existing[srv.name]?.toolError || null,
+          loadingTools: false,
+          restarting: false,
+        }));
+
+        this.lastRefresh = new Date().toLocaleTimeString();
+      } catch (e) {
+        this.fetchError = e.message || 'Network error';
+      } finally {
+        this.loading = false;
+      }
+
+      if (this.showConfig) this.loadConfig();
+    },
+
+    statusClass(status) {
+      if (status === 'configured') return 'bg-green-100 text-green-800';
+      if (status === 'setup_failed') return 'bg-red-100 text-red-800';
+      return 'bg-gray-100 text-gray-600';
+    },
+
+    async loadTools(srv) {
+      srv.loadingTools = true;
+      srv.toolsLoaded = false;
+      srv.toolError = null;
+      try {
+        const res = await fetch(`/gui/api/servers/${encodeURIComponent(srv.name)}/tools`);
+        const data = await res.json();
+        if (data.error) {
+          srv.toolError = data.error;
+        } else {
+          srv.tools = data.tools || [];
+          srv.resource_count = data.resource_count || 0;
+        }
+        srv.toolsLoaded = true;
+      } catch (e) {
+        srv.toolError = e.message;
+        srv.toolsLoaded = true;
+      } finally {
+        srv.loadingTools = false;
+      }
+    },
+
+    async restartServer(srv) {
+      srv.restarting = true;
+      try {
+        await fetch(`/gui/api/servers/${encodeURIComponent(srv.name)}/restart`, { method: 'POST' });
+        setTimeout(() => this.refresh(), 3000);
+      } catch (e) {
+        alert('Restart failed: ' + e.message);
+      } finally {
+        srv.restarting = false;
+      }
+    },
+
+    async restartHub() {
+      if (!confirm('Restart the entire MCP hub? All connections will drop.')) return;
+      this.restarting = true;
+      try {
+        await fetch('/gui/api/servers/__hub__/restart', { method: 'POST' });
+        setTimeout(() => { this.restarting = false; this.refresh(); }, 5000);
+      } catch (_) {
+        setTimeout(() => { this.restarting = false; this.refresh(); }, 5000);
+      }
+    },
+
+    async loadConfig() {
+      try {
+        const res = await fetch('/gui/api/config');
+        const data = await res.json();
+        this.configText = JSON.stringify(data, null, 2);
+      } catch (e) {
+        this.configText = '// Error loading config: ' + e.message;
+      }
+    },
+
+    async saveConfig() {
+      this.savingConfig = true;
+      this.configSaveMsg = '';
+      this.configSaveError = false;
+      try {
+        let parsed;
+        try { parsed = JSON.parse(this.configText); }
+        catch (e) { this.configSaveMsg = 'Invalid JSON: ' + e.message; this.configSaveError = true; return; }
+
+        const res = await fetch('/gui/api/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(parsed),
+        });
+        const data = await res.json();
+        if (data.error) {
+          this.configSaveMsg = 'Error: ' + data.error;
+          this.configSaveError = true;
+        } else {
+          this.configSaveMsg = 'Saved to ' + (data.path || '~/.mcp/mcp-proxied-servers.json');
+        }
+      } catch (e) {
+        this.configSaveMsg = 'Failed: ' + e.message;
+        this.configSaveError = true;
+      } finally {
+        this.savingConfig = false;
+      }
+    },
+  };
+}
+</script>
+</body>
+</html>

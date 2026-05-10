@@ -22,6 +22,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import BaseRoute, Mount, Route
 from starlette.types import Receive, Scope, Send
 
+from .gui_router import create_gui_router
 from .proxy_server import create_proxy_server
 
 logger = logging.getLogger(__name__)
@@ -245,6 +246,9 @@ async def run_mcp_server(
             else:
                 logger.error("No named servers started successfully (all stdio setups failed).")
             return
+
+        hub_base_url = f"http://127.0.0.1:{mcp_settings.port}"
+        all_routes.append(Mount("/gui", app=create_gui_router(_global_status, hub_base_url)))
 
         middleware: list[Middleware] = []
         if mcp_settings.allow_origins:
