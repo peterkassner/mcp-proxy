@@ -2,7 +2,7 @@
 # Restart the Mac MCP LAN bridge (mcp-proxy LaunchAgent) and verify via HTTP /status.
 #
 # Plist refresh: before bootstrap, copies MCP_PROXY_LAUNCHAGENT_PLIST_SOURCE (default:
-# deploy/mcp/mcp-proxy-hub/com.peterkjackson.mcp-proxy-bridge.plist) onto
+# deploy/mcp/mcp-proxy-hub/com.peterkjackson.mcp-proxy-hub.plist) onto
 # MCP_PROXY_LAUNCHAGENT_PLIST (default: ~/Library/LaunchAgents/<label>.plist). Set
 # MCP_PROXY_SKIP_PLIST_SYNC=1 to skip copying (e.g. you manage the LaunchAgents plist elsewhere).
 #
@@ -11,7 +11,7 @@
 # We therefore clear the port after bootout so the new instance can bind.
 set -euo pipefail
 
-readonly LABEL='com.peterkjackson.mcp-proxy-bridge'
+readonly LABEL='com.peterkjackson.mcp-proxy-hub'
 readonly PORT='8096'
 readonly STATUS_URL="http://127.0.0.1:${PORT}/status"
 readonly USER_ID="$(id -u)"
@@ -23,7 +23,7 @@ readonly MAX_WAIT_SEC="${MCP_PROXY_RESTART_MAX_WAIT_SEC:-120}"
 readonly PLIST="${MCP_PROXY_LAUNCHAGENT_PLIST:-${HOME}/Library/LaunchAgents/${LABEL}.plist}"
 # Repo-side plist (default: alongside this script). Copied onto PLIST before each reload so
 # launchd always bootstraps the on-disk definition from the hub, not a stale LaunchAgents copy.
-readonly PLIST_SOURCE="${MCP_PROXY_LAUNCHAGENT_PLIST_SOURCE:-${0:A:h}/com.peterkjackson.mcp-proxy-bridge.plist}"
+readonly PLIST_SOURCE="${MCP_PROXY_LAUNCHAGENT_PLIST_SOURCE:-${0:A:h}/com.peterkjackson.mcp-proxy-hub.plist}"
 
 log() { print -r -- "[bridge-restart] $*"; }
 
@@ -452,5 +452,5 @@ done
 log "ERROR: no response from ${STATUS_URL} within ${MAX_WAIT_SEC}s"
 emit_http_timeout_snapshot
 log "check: launchctl print ${SERVICE_TARGET}"
-log "check: tail ~/Library/Logs/com.peterkjackson.mcp-proxy-bridge/mcp-proxy-hub.log"
+log "check: tail ~/Library/Logs/com.peterkjackson.mcp-proxy-hub/mcp-proxy-hub.log"
 exit 1

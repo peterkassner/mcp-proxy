@@ -1,5 +1,6 @@
 """Create a local SSE server that proxies requests to a stdio MCP server."""
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -26,6 +27,11 @@ from .gui_router import create_gui_router
 from .proxy_server import create_proxy_server
 
 logger = logging.getLogger(__name__)
+
+# Per-server startup timeout. Servers that don't respond within this many seconds are skipped
+# but the hub continues (fault isolation). Parallel startup means total wait ≈ max(server times),
+# not sum — so 60 s is generous but won't cause a 20-minute hub start with 12 servers.
+NAMED_SERVER_TIMEOUT: int = 60
 
 # Vendor overlay for Mac hub diagnostics (mcp-proxy fork). See hub/apply_mcp_hub_diag_patch.py.
 
@@ -177,7 +183,7 @@ async def run_mcp_server(
                 " ".join(default_server_params.args),
             )
             stdio_streams = await stack.enter_async_context(
-                stdio_client(default_server_params, server_label="default"),
+                stdio_client(default_server_params),
             )
             session = await stack.enter_async_context(ClientSession(*stdio_streams))
             proxy = await create_proxy_server(session)
@@ -193,52 +199,73 @@ async def run_mcp_server(
         # -- 2026-04-27, CC2: named-server fault isolation. One bad child (e.g. Qdrant import
         # error) used to abort the whole hub; now only that name is skipped, /status still comes
         # up, other MCP routes stay wired.
+        #
+        # -- 2026-05-10, CC2: parallel startup with per-server timeout. Sequential init caused
+        # 20-30 min startups when slow servers (GitKraken ~90s, asus-merlin ~3min) blocked the
+        # loop. Now all servers start concurrently; total wait ≈ max(server times) not sum.
         named_runtime_stacks: list[contextlib.AsyncExitStack] = []
         wired_named: list[str] = []
-        for name, params in named_server_params.items():
-            logger.info(
-                "_%s_ [%s] Setting up named server: %s %s",
-                os.getpid(),
-                name,
-                params.command,
-                " ".join(params.args),
-            )
+
+        async def _setup_named_server(
+            name: str, params: StdioServerParameters
+        ) -> tuple[str, Mount, contextlib.AsyncExitStack] | None:
+            """Start one named server subprocess with a timeout. Returns (name, mount, stack)
+            on success, or None on timeout/error (hub continues without it)."""
             srv_stack = contextlib.AsyncExitStack()
             await srv_stack.__aenter__()
+            label = f"_{os.getpid()}_ [{name}]"
             try:
-                stdio_streams_named = await srv_stack.enter_async_context(
-                    stdio_client(params, server_label=name),
+                logger.info(
+                    "%s Setting up named server: %s %s",
+                    label,
+                    params.command,
+                    " ".join(params.args),
                 )
-                session_named = await srv_stack.enter_async_context(ClientSession(*stdio_streams_named))
-                proxy_named = await create_proxy_server(session_named)
-
-                instance_routes_named, http_manager_named = create_single_instance_routes(
-                    proxy_named,
-                    stateless_instance=mcp_settings.stateless,
-                )
-                await srv_stack.enter_async_context(http_manager_named.run())
+                async with asyncio.timeout(NAMED_SERVER_TIMEOUT):
+                    stdio_streams_named = await srv_stack.enter_async_context(
+                        stdio_client(params),
+                    )
+                    session_named = await srv_stack.enter_async_context(
+                        ClientSession(*stdio_streams_named)
+                    )
+                    proxy_named = await create_proxy_server(session_named)
+                    instance_routes_named, http_manager_named = create_single_instance_routes(
+                        proxy_named,
+                        stateless_instance=mcp_settings.stateless,
+                    )
+                    await srv_stack.enter_async_context(http_manager_named.run())
 
                 server_mount = Mount(f"/servers/{name}", routes=instance_routes_named)
-                all_routes.append(server_mount)
                 _global_status["server_instances"][name] = "configured"
-                wired_named.append(name)
-                named_runtime_stacks.append(srv_stack)
+                logger.info("%s ready", label)
+                return name, server_mount, srv_stack
+            except TimeoutError:
+                logger.warning(
+                    "%s setup timed out after %ds; skipping (hub continues with other servers)",
+                    label,
+                    NAMED_SERVER_TIMEOUT,
+                )
+                _global_status["server_instances"][name] = "timeout"
             except Exception:
                 logger.exception(
-                    "_%s_ [%s] setup failed; skipping (hub continues with other servers)",
-                    os.getpid(),
-                    name,
+                    "%s setup failed; skipping (hub continues with other servers)", label
                 )
                 _global_status["server_instances"][name] = "setup_failed"
-                try:
-                    await srv_stack.aclose()
-                except Exception:
-                    logger.exception(
-                        "_%s_ [%s] cleanup after failed setup raised again",
-                        os.getpid(),
-                        name,
-                    )
-                continue
+            try:
+                await srv_stack.aclose()
+            except Exception:
+                logger.exception("%s cleanup after failed setup raised again", label)
+            return None
+
+        setup_results = await asyncio.gather(
+            *[_setup_named_server(name, params) for name, params in named_server_params.items()],
+        )
+        for result in setup_results:
+            if result is not None:
+                _name, server_mount, srv_stack = result
+                all_routes.append(server_mount)
+                wired_named.append(_name)
+                named_runtime_stacks.append(srv_stack)
 
         if not default_server_params and not wired_named:
             if not named_server_params:
